@@ -8,6 +8,27 @@ import pandas as pd
 import plotly.graph_objects as go
 import plotly.express as px
 from plotly.subplots import make_subplots
+import snowflake.connector
+
+@st.cache_resource
+def get_connection():
+    return snowflake.connector.connect(
+        account   = st.secrets["snowflake"]["account"],
+        user      = st.secrets["snowflake"]["user"],
+        password  = st.secrets["snowflake"]["password"],
+        warehouse = st.secrets["snowflake"]["warehouse"],
+        database  = st.secrets["snowflake"]["database"],
+        schema    = st.secrets["snowflake"]["schema"],
+        role      = st.secrets["snowflake"]["role"],
+    )
+
+@st.cache_data(ttl=3600)
+def run_query(sql):
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(sql)
+    cols = [d[0].lower() for d in cur.description]
+    return pd.DataFrame(cur.fetchall(), columns=cols)
 
 st.set_page_config(
     page_title="Berkshire 13F Intelligence",
@@ -145,13 +166,65 @@ def plotly_dark_layout(height=320, margin=None):
         legend=dict(bgcolor='#161B22', bordercolor='#21262D', font=dict(size=10)),
     )
 
-# ── Load data (Snowflake or local) ─────────────────────────────────────────────
-from snowflake_connector import load_holdings, load_quarters, load_concentration, load_sector_data
+# ── Load data from Snowflake ──────────────────────────────────────────────────
+@st.cache_data(ttl=3600)
+def load_snapshot():
+    return run_query("""
+        SELECT quarter, filing_date, issuer_name, cusip, sector, industry,
+               CAST(value_usd AS FLOAT) AS value_usd,
+               CAST(pct_of_portfolio AS FLOAT) AS pct_of_portfolio,
+               holding_rank, drift_flag,
+               CAST(value_change_usd AS FLOAT) AS value_change_usd,
+               CAST(total_value_usd AS FLOAT) AS total_value_usd,
+               total_holdings, is_top_5, is_top_10
+        FROM BERKSHIRE_ANALYTICS.RAW_MARTS.MART_PORTFOLIO_SNAPSHOT
+        ORDER BY holding_rank
+    """).to_dict("records")
 
-snapshot_holdings, HOLDINGS = load_holdings()
-QUARTERS        = load_quarters()
+@st.cache_data(ttl=3600)
+def load_all_holdings():
+    return run_query("""
+        SELECT quarter, filing_date, issuer_name, cusip, sector,
+               CAST(value_usd AS FLOAT) AS value_usd,
+               CAST(pct_of_portfolio AS FLOAT) AS pct_of_portfolio,
+               holding_rank, drift_flag,
+               CAST(value_change_usd AS FLOAT) AS value_change_usd
+        FROM BERKSHIRE_ANALYTICS.RAW_MARTS.MART_DRIFT_ANALYSIS
+        ORDER BY filing_date DESC, holding_rank
+    """).to_dict("records")
+
+@st.cache_data(ttl=3600)
+def load_concentration():
+    return run_query("""
+        SELECT quarter, filing_date,
+               CAST(top_1_pct AS FLOAT) AS top_1_pct,
+               CAST(top_3_pct AS FLOAT) AS top_3_pct,
+               CAST(top_5_pct AS FLOAT) AS top_5_pct,
+               CAST(top_10_pct AS FLOAT) AS top_10_pct,
+               CAST(top_20_pct AS FLOAT) AS top_20_pct,
+               CAST(hhi_score AS FLOAT) AS hhi_score,
+               CAST(total_value_usd AS FLOAT) AS total_value_usd,
+               total_holdings
+        FROM BERKSHIRE_ANALYTICS.RAW_MARTS.MART_CONCENTRATION_METRICS
+        ORDER BY filing_date
+    """).to_dict("records")
+
+@st.cache_data(ttl=3600)
+def load_sectors():
+    return run_query("""
+        SELECT quarter, filing_date, sector,
+               CAST(sector_pct AS FLOAT) AS sector_pct,
+               CAST(sector_value_usd AS FLOAT) AS sector_value_usd,
+               holding_count, sector_rank
+        FROM BERKSHIRE_ANALYTICS.RAW_MARTS.MART_SECTOR_ROTATION
+        ORDER BY filing_date DESC, sector_pct DESC
+    """).to_dict("records")
+
+snapshot_holdings  = load_snapshot()
+HOLDINGS           = load_all_holdings()
+QUARTERS           = sorted(list(set(h["quarter"] for h in HOLDINGS)), reverse=True)
 CONCENTRATION_DATA = load_concentration()
-SECTOR_DATA     = load_sector_data()
+SECTOR_DATA        = load_sectors()
 
 # ── Header ─────────────────────────────────────────────────────────────────────
 latest_q  = QUARTERS[0] if QUARTERS else "Q1 2026"
