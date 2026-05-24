@@ -10,19 +10,20 @@ import plotly.express as px
 from plotly.subplots import make_subplots
 import snowflake.connector
 
-@st.cache_resource
 def get_connection():
     return snowflake.connector.connect(
-        account   = st.secrets["snowflake"]["account"],
-        user      = st.secrets["snowflake"]["user"],
-        password  = st.secrets["snowflake"]["password"],
-        warehouse = st.secrets["snowflake"]["warehouse"],
-        database  = st.secrets["snowflake"]["database"],
-        schema    = st.secrets["snowflake"]["schema"],
-        role      = st.secrets["snowflake"]["role"],
+        account                   = st.secrets["snowflake"]["account"],
+        user                      = st.secrets["snowflake"]["user"],
+        password                  = st.secrets["snowflake"]["password"],
+        warehouse                 = st.secrets["snowflake"]["warehouse"],
+        database                  = st.secrets["snowflake"]["database"],
+        schema                    = st.secrets["snowflake"]["schema"],
+        role                      = st.secrets["snowflake"]["role"],
+        client_session_keep_alive = True,
+        login_timeout             = 60,
     )
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=600)
 def run_query(sql):
     conn = get_connection()
     cur = conn.cursor()
